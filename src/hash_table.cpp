@@ -26,11 +26,18 @@ std::size_t HashTable::hashFunction(const std::string& key) const {
 }
 
 std::size_t HashTable::probe(const std::string& key) const {
+    // Quadratic probing: try home, home + 1^2, home + 2^2, ...
+    // Stops at the slot holding this key (live or tombstone) or the first never-used slot.
+    // Deleted slots are skipped so keys placed after them can still be found.
+    // Returns capacity() if no such slot turns up within capacity() probes.
     std::size_t index = hashFunction(key);
     std::size_t original = index;
     std::size_t step = 1;
 
     while (table_[index].occupied && table_[index].key != key) {
+        if (step >= table_.size()) {
+            return table_.size();
+        }
         index = (original + step * step) % table_.size();
         ++step;
     }
@@ -38,30 +45,56 @@ std::size_t HashTable::probe(const std::string& key) const {
 }
 
 bool HashTable::insert(const std::string& key, int value) {
-    (void)key;
-    (void)value;
-    throw std::logic_error("Student implementation required: insert");
+    if (contains(key)) {
+        return false;
+    }
+
+    // Grow before the load factor passes 0.5 so quadratic probing can always find a free slot.
+    if (static_cast<double>(size_ + 1) / static_cast<double>(table_.size()) > 0.5) {
+        rehash();
+    }
+
+    std::size_t index = probe(key);
+    while (index == table_.size()) {
+        rehash();
+        index = probe(key);
+    }
+
+    // Either a never-used slot or this key's old tombstone.
+    table_[index] = HashEntry(key, value, true, false);
+    ++size_;
+    return true;
 }
 
 bool HashTable::remove(const std::string& key) {
-    (void)key;
-    throw std::logic_error("Student implementation required: remove");
+    if (!contains(key)) {
+        return false;
+    }
+
+    // Leave a tombstone instead of clearing the slot, so later keys in the probe chain stay reachable.
+    table_[probe(key)].deleted = true;
+    --size_;
+    return true;
 }
 
 bool HashTable::contains(const std::string& key) const {
-    (void)key;
-    throw std::logic_error("Student implementation required: contains");
+    const std::size_t index = probe(key);
+    return index < table_.size() && table_[index].occupied && !table_[index].deleted;
 }
 
 int HashTable::get(const std::string& key) const {
-    (void)key;
-    throw std::logic_error("Student implementation required: get");
+    if (!contains(key)) {
+        throw std::out_of_range("Key not found: " + key);
+    }
+    return table_[probe(key)].value;
 }
 
 bool HashTable::update(const std::string& key, int newValue) {
-    (void)key;
-    (void)newValue;
-    throw std::logic_error("Student implementation required: update");
+    if (!contains(key)) {
+        return false;
+    }
+    table_[probe(key)].value = newValue;
+    return true;
 }
 
 std::size_t HashTable::size() const noexcept {
@@ -101,7 +134,18 @@ std::vector<int> HashTable::values() const {
 }
 
 void HashTable::rehash() {
-    throw std::logic_error("Student implementation required: rehash");
+    // Move every live entry into a table about twice as big (next prime).
+    // Tombstones are dropped, so the new table starts clean.
+    std::vector<HashEntry> oldTable = std::move(table_);
+    table_ = std::vector<HashEntry>(nextPrime(oldTable.size() * 2 + 1));
+    size_ = 0;
+
+    for (const auto& entry : oldTable) {
+        if (entry.occupied && !entry.deleted) {
+            table_[probe(entry.key)] = HashEntry(entry.key, entry.value, true, false);
+            ++size_;
+        }
+    }
 }
 
 bool HashTable::isPrime(std::size_t value) const {
